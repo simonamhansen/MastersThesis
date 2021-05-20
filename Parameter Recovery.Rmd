@@ -1,0 +1,850 @@
+---
+title: "Session recovery & model comparison"
+output: html_document
+---
+
+Simulated environment
+
+```{r}
+pacman::p_load(dplyr, fitdistrplus, rstan, extraDistr, ggplot2, reshape2, bayestestR, Metrics)
+
+setwd("~/Cognitive model")
+
+# Read in data
+data = read.csv("Data/session1000_wExpertratings.csv", row.names =  1)
+
+# Estimate session length distribution
+IDS = unique(data$profile_id)
+
+# For a single indidiual
+ind_dist = fitdist(data$sesion_length[data$profile_id == 339], distr = "gamma")
+plot(density(data$sesion_length[data$profile_id == 339])) +
+lines(density(rgamma(n= 10000, shape = ind_dist$estimate[1], rate = ind_dist$estimate[2])), col = "red")
+
+# For the group
+session_length = fitdist(data$sesion_length, distr = "gamma", method = "mme")
+plot(density(data$sesion_length)) +
+lines(density(rgamma(n= 10000, shape = session_length$estimate[1], rate = session_length$estimate[2])), col = "red")
+
+# Estimate distribution for number of sessions
+session_n = data %>% count(profile_id) 
+
+session_n_dist = fitdist(session_n$n, distr = "gamma")
+plot(density(session_n$n)) + 
+lines(density(rgamma(n= 10000, shape = as.numeric(session_n_dist$estimate[1]), rate = as.numeric(session_n_dist$estimate[2]))), col = "red")
+
+# Session outcome by game
+outcome_dists = data.frame(game = rep(0, 8), location_par = rep(0,8), scale_par = rep(0,8))
+
+for (i in 1:8){
+  temp =fitdist(data$outcome[data$game == i], "cauchy")
+  outcome_dists$game[i] = i
+  outcome_dists$location_par[i] = as.numeric(temp$estimate[1])
+  outcome_dists$scale_par[i] = as.numeric(temp$estimate[2])
+}
+  
+```
+
+ORL forward simulation function
+
+```{r}
+ORL = function(session_n_dist, Arew, Apun, K, wp, wf, theta){
+  ntrials = rgamma(n= 1, shape = as.numeric(session_n_dist$estimate[1]), rate = as.numeric(session_n_dist$estimate[2]))
+  ntrials = ifelse(ntrials < 50, 50, ntrials)
+  x <- array(0, c(ntrials)) #choice
+  r <- array(0, c(ntrials)) #outcome
+  signX <- array(0,c(ntrials)) #sign of outcome
+  Ev <- array(0, c(ntrials, 8)) # Expected utility
+  Ev_update <- array(0, c(ntrials, 8)) # Trick to update expected utility 
+  Ef <- array(0, c(ntrials, 8)) # Expected frequency
+  Ef_chosen <- array(0, c(ntrials, 8)) # Expected frequency for chosen deck
+  Ef_notchosen <- array(0, c(ntrials, 8)) # Same as above for unchosen decks
+  PS <- array(0, c(ntrials, 8)) # Perseverance value for each deck
+  v <- array(0, c(ntrials, 8)) # Valence (combined score of EV, Ef and perseverance)
+  exp_p <- array(0, c(ntrials, 8)) # Exponentiated Valence
+  p <- array(0, c(ntrials, 8)) # probabilities
+  
+  K_tr = 3^K-1
+  
+  x[1] <- rcat(1, rep(12.5, 8))
+  r[1] <- rcauchy(1, location = outcome_dists$location_par[outcome_dists$game == x[1]], scale = outcome_dists$scale_par[outcome_dists$game == x[1]])
+  r[1] = r[1]/100
+  
+  for (t in 2:ntrials){
+    signX[t] <-ifelse(r[t-1]==0, 0, ifelse(r[t-1]<0, -1, 1)) 
+    for (d in 1:8){
+      
+      Ev_update[t,d] <- ifelse(r[t-1] >= 0, Ev[t-1,d]+ Arew*(r[t-1] - Ev[t-1,d]), Ev[t-1,d]+ Apun*(r[t-1] - Ev[t-1,d]))
+      
+      Ev[t,d] <- ifelse(x[t-1] ==d, Ev_update[t,d], Ev[t-1,d])
+      
+      Ef_chosen[t,d] <- ifelse(r[t-1] >= 0, Ef[t-1,d]+ Arew*(signX[t] - Ef[t-1,d]), Ef[t-1,d]+ Apun*(signX[t] - Ef[t-1,d]))
+      
+      Ef_notchosen[t,d] <- ifelse(r[t-1] >= 0, Ef[t-1,d]+ Arew*((-signX[t])/3 - Ef[t-1,d]), Ef[t-1,d]+ Apun*((-signX[t])/7 - Ef[t-1,d])) 
+      
+      Ef[t,d] <- ifelse(x[t-1] ==d, Ef_chosen[t,d], Ef_notchosen[t,d])
+      
+      PS[t,d] <- ifelse(x[t-1] ==d, 1/(1+K_tr), PS[t-1,d]/(1+K_tr))
+      
+      v[t,d] <- Ev[t,d] + wf*Ef[t,d] + wp*PS[t,d]
+      
+      v[t,d] = ifelse(v[t,d] > 700, 700, v[t,d]) # Sort of hacky solution to avoid inf values
+      
+      exp_p[t,d] <- exp(theta*v[t,d])
+      
+    }
+    
+    for (d in 1:8){
+      
+      p[t,d] <- exp_p[t,d]/sum(exp_p[t,])
+      
+    }
+    x[t] <- rcat(1, p[t,])
+    r[t] <- rcauchy(1, location = outcome_dists$location_par[outcome_dists$game == x[t]], scale = outcome_dists$scale_par[outcome_dists$game == x[t]])
+    r[t] <- r[t]/100 # Scale rewards
+  }
+  results <- list(x=x, r=r, Ev=Ev, Ef = Ef, PS = PS , p = p, exp_p = exp_p)
+}
+
+```
+
+Do a few simulations on ORL forward simulation
+
+```{r}
+# From ORL paper
+sim= ORL(session_n_dist, 0.1, 0.02, 0.2, 2, 2, 1)
+plot(sim$x)
+
+#Other combinations
+sim= ORL(session_n_dist, 0.5, 0.3, 3, -5, 5, 5)
+plot(sim$x)
+
+choice_prop=as.data.frame(sim$p)
+choice_prop<- cbind(session_n = rownames(choice_prop), choice_prop)
+
+mydf2 <- melt(choice_prop)
+mydf2$session_n = as.numeric(mydf2$session_n)
+ggplot(data=mydf2) + geom_line(aes(x=session_n, y=value, group=variable, colour=variable)) + theme_bw()
+
+```
+
+ORL Parameter recovery
+
+```{r}
+niter = 100
+
+# Empty arrays
+true_param = array(0, c(niter, 5))
+infer_param = array(0, c(niter, 5))
+  
+# Loop through each iteration
+for (n in 1:niter){
+  
+  # Draw random variables
+  Arew = round(runif(1, 0, 1), 2)
+  Apun = round(runif(1, 0, 1),2)
+  K = round(runif(1, 0, 5), 2)
+  wp = round(rnorm(1, 0, 5),2)
+  wf = round(rnorm(1, 0, 5), 2)
+  
+  # Save to the true param array
+  true_param[n, 1] = Arew
+  true_param[n, 2] = Apun
+  true_param[n, 3] = K
+  true_param[n, 4] = wp 
+  true_param[n, 5] = wf
+    
+  # run simulation function
+  sim = ORL(session_n_dist, Arew, Apun, K, wp, wf, 1)
+  
+  # Recover parameters
+  dats = list(N = length(sim$x), x=sim$x, o = sim$r, sign = sign(sim$r))
+  samples <- stan(file = "Models/REcovery/ORL_recovery_model.stan", data = dats, cores = 2, chains = 4, iter = 4000, warmup = 1000)
+  
+  ext_samp = rstan::extract(samples)
+  
+  # Extract map
+  infer_param[n, 1] = map_estimate(ext_samp$Arew, precision = 12000)
+  infer_param[n, 2] = map_estimate(ext_samp$Apun, precision = 12000)
+  infer_param[n, 3] = map_estimate(ext_samp$K, precision = 12000)
+  infer_param[n, 4] = map_estimate(ext_samp$wp, precision = 12000)
+  infer_param[n, 5] = map_estimate(ext_samp$wf, precision = 12000)
+
+  print(n)
+}
+  
+
+```
+
+Plot results from ORL parameter recovery 
+
+```{r}
+
+# Potentially combine into one plot. Consider adding 90 % HDI to align more with Baysian approach
+
+plot1 = ggplot(data = data.frame(true = true_param[,1], inferred = infer_param[,1]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("Arew") + xlim(0,1) + ylim(0,1)
+
+plot2 = ggplot(data = data.frame(true = true_param[,2], inferred = infer_param[,2]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("Apun") + xlim(0,1) + ylim(0,1)
+
+plot5 = ggplot(data = data.frame(true = true_param[,3], inferred = infer_param[,3]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("K")
+
+plot3 = ggplot(data = data.frame(true = true_param[,4], inferred = infer_param[,4]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("wp") + xlim(-10,10) + ylim(-10,10)
+
+plot4 = ggplot(data = data.frame(true = true_param[,5], inferred = infer_param[,5]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("wf") + xlim(-10,10) + ylim(-10,10)
+
+cowplot:: plot_grid(plot1, plot2, plot3, plot4 ,plot5)
+
+# Make on plot to rule them all 
+all_param = rbind(true_param, infer_param)
+
+all_param_scale = scale(all_param)
+
+param = data.frame(true_par=unlist(as.data.frame(all_param_scale[1:100,])))
+param$param = c(rep("Arew", 100), rep("Aloss", 100), rep("K",100), rep("wp", 100), rep("wf", 100))
+
+infer_param2 = data.frame(infer_par=unlist(as.data.frame(all_param_scale[101:200,])))
+
+param$infer_par = infer_param2$infer_par
+
+ggplot(param, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("ORL model recovery result") + ggeasy::easy_center_title()
+
+# Get descriptive values. MAE (Mean absolute error)
+param %>% group_by(param) %>% summarise(sum(abs(true_par-infer_par))/100)
+
+param %>% group_by(param) %>% summarise(rmse(true_par, infer_par))
+
+```
+
+
+Haibutal ORL model with within session frequency forward simulation
+```{r}
+ORL_freq = function(session_n_dist, Aval, Afreq, Ahab, wfreq, whab){
+  win_freq = c("val1", "val2", "val3", "val4", "val5", "val6", "val7", "val8") # values have been removed due to data agreements
+  win_freq_sd = c("val1", "val2", "val3", "val4", "val5", "val6", "val7", "val8") # values have been removed due to data agreements
+  ntrials = rgamma(n= 1, shape = as.numeric(session_n_dist$estimate[1]), rate = as.numeric(session_n_dist$estimate[2]))
+  x <- array(0, c(ntrials)) #choice
+  r <- array(0, c(ntrials)) #outcome
+  freq <- array(0,c(ntrials)) #sign of outcome
+  Ev <- array(0, c(ntrials, 8)) # Expected utility
+  Ev_update <- array(0, c(ntrials, 8)) # Trick to update expected utility 
+  Ef <- array(0, c(ntrials, 8)) # Expected frequency
+  Ef_update <- array(0, c(ntrials, 8)) # Expected frequency update value
+  HAB <- array(0, c(ntrials, 8)) # Habitual signal
+  v <- array(0, c(ntrials, 8)) # Valence (combined score of EV, Ef and perseverance)
+  exp_p <- array(0, c(ntrials, 8)) # Exponentiated Valence
+  p <- array(0, c(ntrials, 8)) # probabilities
+  
+  
+  x[1] = rcat(1, rep(12.5, 8))
+  r[1] = rcauchy(1, location = outcome_dists$location_par[outcome_dists$game == x[1]], scale = outcome_dists$scale_par[outcome_dists$game == x[1]])
+  r[1] = r[1]/100
+  freq_temp = rnorm(1, win_freq[x[1]], win_freq_sd[x[1]])
+  freq[1] = ifelse(freq_temp < 0, 0, freq_temp)
+  
+  for (t in 2:ntrials){
+    for (d in 1:8){
+      
+      Ev_update[t,d] = Ev[t-1,d]+ Aval*(r[t-1] - Ev[t-1,d])
+      
+      Ev[t,d] <- ifelse(x[t-1] ==d, Ev_update[t,d], Ev[t-1,d])
+      
+      Ef_update[t,d] <- Ef[t-1,d]+ Afreq *(freq[t-1] - Ef[t-1,d])
+      
+      Ef[t,d] <- ifelse(x[t-1] ==d, Ef_update[t,d], Ef[t-1,d])
+      
+      HAB[t,d] <- ifelse(x[t-1] ==d, HAB[t-1,d]+ Ahab*(1-HAB[t-1,d]), HAB[t-1,d]+ Ahab*(0-HAB[t-1,d]))
+      
+      v[t,d] <- Ev[t,d] + wfreq*Ef[t,d] + whab*HAB[t,d]
+      
+      v[t,d] = ifelse(v[t,d] > 700, 700, v[t,d]) # Sort of hacky solution to avoid inf values
+      
+      exp_p[t,d] <- exp(v[t,d])
+      
+    }
+    
+    for (d in 1:8){
+      
+      p[t,d] <- exp_p[t,d]/sum(exp_p[t,])
+      
+    }
+    x[t] <- rcat(1, p[t,])
+    r[t] <- rcauchy(1, location = outcome_dists$location_par[outcome_dists$game == x[t]], scale = outcome_dists$scale_par[outcome_dists$game == x[t]])
+    r[t] <- r[t]/100 # Scale rewards
+    freq_temp = rnorm(1, win_freq[x[t]], win_freq_sd[x[t]])
+    freq[t] = ifelse(freq_temp < 0, 0, freq_temp)
+     
+  }
+  results <- list(x=x, r=r, freq = freq, Ev=Ev, Ef = Ef, HAB = HAB , p = p, exp_p = exp_p)
+}
+
+
+
+```
+
+
+Habitual ORL model with within session win frequency recovery
+
+```{r}
+
+niter = 100
+
+# Empty arrays
+true_param = array(0, c(niter, 5))
+infer_param = array(0, c(niter, 5))
+  
+# Loop through each iteration
+for (n in 1:niter){
+  
+  # Draw random variables
+  Aval = round(runif(1, 0, 1), 2)
+  Afreq = round(runif(1, 0, 1),2)
+  Ahab = round(runif(1, 0, 1), 2)
+  wfreq = round(rnorm(1, 0, 5),2)
+  whab = round(rnorm(1, 0, 5), 2)
+  
+  # Save to the true param array
+  true_param[n, 1] = Aval
+  true_param[n, 2] = Afreq
+  true_param[n, 3] = Ahab
+  true_param[n, 4] = wfreq 
+  true_param[n, 5] = whab
+    
+  # run simulation function
+  sim = ORL_freq(session_n_dist, Aval, Afreq, Ahab, wfreq, whab)
+  
+  # Recover parameters
+  dats = list(N = length(sim$x), x=sim$x, o = sim$r, freq = sim$freq)
+  samples <- stan(file = "Models/Recovery/ORL2_recovery.stan", data = dats, cores = 2, chains = 4, iter = 4000, warmup = 1000)
+  
+  ext_samp = rstan::extract(samples)
+  
+  # Extract map
+  infer_param[n, 1] = map_estimate(ext_samp$Aval, precision = 12000)
+  infer_param[n, 2] = map_estimate(ext_samp$Afreq, precision = 12000)
+  infer_param[n, 3] = map_estimate(ext_samp$Ahab, precision = 12000)
+  infer_param[n, 4] = map_estimate(ext_samp$wfreq, precision = 12000)
+  infer_param[n, 5] = map_estimate(ext_samp$whab, precision = 12000)
+
+  print(n)
+}
+
+
+
+```
+
+
+Inspect plots for habitual ORL 
+
+```{r}
+
+# Potentially combine into one plot. Consider adding 90 % HDI to align more with Baysian approach
+
+plot1 = ggplot(data = data.frame(true = true_param[,1], inferred = infer_param[,1]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("Aval") + xlim(0,1) + ylim(0,1)
+
+plot2 = ggplot(data = data.frame(true = true_param[,2], inferred = infer_param[,2]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("Afreq") + xlim(0,1) + ylim(0,1)
+
+plot3 = ggplot(data = data.frame(true = true_param[,3], inferred = infer_param[,3]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("Ahab") + xlim(0,1) +ylim(0,1)
+
+plot4 = ggplot(data = data.frame(true = true_param[,4], inferred = infer_param[,4]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("wfreq") + xlim(-10,10) + ylim(-10,10)
+
+plot5 = ggplot(data = data.frame(true = true_param[,5], inferred = infer_param[,5]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("whab") + xlim(-10,10) + ylim(-10,10)
+
+cowplot:: plot_grid(plot1, plot2, plot3, plot4 ,plot5)
+
+# Make on plot to rule them all 
+all_param = rbind(true_param, infer_param)
+
+all_param_scale = scale(all_param)
+
+param = data.frame(true_par=unlist(as.data.frame(all_param_scale[1:100,])))
+param$param = c(rep("Aval", 100), rep("Afreq", 100), rep("AHab",100), rep("wfreq", 100), rep("whab", 100))
+
+infer_param2 = data.frame(infer_par=unlist(as.data.frame(all_param_scale[101:200,])))
+
+param$infer_par = infer_param2$infer_par
+
+ggplot(param, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("ORL model recovery result") + ggeasy::easy_center_title()
+
+# Get descriptive values. MAE (Mean absolute error)
+param %>% group_by(param) %>% summarise(sum(abs(true_par-infer_par))/100)
+
+param %>% group_by(param) %>% summarise(rmse(true_par, infer_par))
+
+
+```
+
+ORL with habitual update and standard ORL frequency learning (forward simulation)
+
+```{r}
+
+ORL_hab = function(session_n_dist, Arew, Apun, Ahab, whab, wf){
+  ntrials = rgamma(n= 1, shape = as.numeric(session_n_dist$estimate[1]), rate = as.numeric(session_n_dist$estimate[2]))
+  ntrials = ifelse(ntrials < 50, 50, ntrials)
+  x <- array(0, c(ntrials)) #choice
+  r <- array(0, c(ntrials)) #outcome
+  signX <- array(0,c(ntrials)) #sign of outcome
+  Ev <- array(0, c(ntrials, 8)) # Expected utility
+  Ev_update <- array(0, c(ntrials, 8)) # Trick to update expected utility 
+  Ef <- array(0, c(ntrials, 8)) # Expected frequency
+  Ef_chosen <- array(0, c(ntrials, 8)) # Expected frequency for chosen deck
+  Ef_notchosen <- array(0, c(ntrials, 8)) # Same as above for unchosen decks
+  HAB <- array(0, c(ntrials, 8)) # Perseverance value for each deck
+  v <- array(0, c(ntrials, 8)) # Valence (combined score of EV, Ef and perseverance)
+  exp_p <- array(0, c(ntrials, 8)) # Exponentiated Valence
+  p <- array(0, c(ntrials, 8)) # probabilities
+  
+  x[1] <- rcat(1, rep(12.5, 8))
+  r[1] <- rcauchy(1, location = outcome_dists$location_par[outcome_dists$game == x[1]], scale = outcome_dists$scale_par[outcome_dists$game == x[1]])
+  r[1] = r[1]/100
+  
+  for (t in 2:ntrials){
+    signX[t] <-ifelse(r[t-1]==0, 0, ifelse(r[t-1]<0, -1, 1)) 
+    for (d in 1:8){
+      
+      Ev_update[t,d] <- ifelse(r[t-1] >= 0, Ev[t-1,d]+ Arew*(r[t-1] - Ev[t-1,d]), Ev[t-1,d]+ Apun*(r[t-1] - Ev[t-1,d]))
+      
+      Ev[t,d] <- ifelse(x[t-1] ==d, Ev_update[t,d], Ev[t-1,d])
+      
+      Ef_chosen[t,d] <- ifelse(r[t-1] >= 0, Ef[t-1,d]+ Arew*(signX[t] - Ef[t-1,d]), Ef[t-1,d]+ Apun*(signX[t] - Ef[t-1,d]))
+      
+      Ef_notchosen[t,d] <- ifelse(r[t-1] >= 0, Ef[t-1,d]+ Arew*((-signX[t])/3 - Ef[t-1,d]), Ef[t-1,d]+ Apun*((-signX[t])/7 - Ef[t-1,d])) 
+      
+      Ef[t,d] <- ifelse(x[t-1] ==d, Ef_chosen[t,d], Ef_notchosen[t,d])
+      
+      HAB[t,d] <- ifelse(x[t-1] ==d, HAB[t-1,d]+ Ahab*(1-HAB[t-1,d]), HAB[t-1,d]+ Ahab*(0-HAB[t-1,d]))
+      
+      v[t,d] <- Ev[t,d] + wf*Ef[t,d] + whab*HAB[t,d]
+      
+      v[t,d] = ifelse(v[t,d] > 700, 700, v[t,d]) # Sort of hacky solution to avoid inf values
+      
+      exp_p[t,d] <- exp(v[t,d])
+      
+    }
+    
+    for (d in 1:8){
+      
+      p[t,d] <- exp_p[t,d]/sum(exp_p[t,])
+      
+    }
+    x[t] <- rcat(1, p[t,])
+    r[t] <- rcauchy(1, location = outcome_dists$location_par[outcome_dists$game == x[t]], scale = outcome_dists$scale_par[outcome_dists$game == x[t]])
+    r[t] <- r[t]/100 # Scale rewards
+  }
+  results <- list(x=x, r=r, Ev=Ev, Ef = Ef, HAB = HAB, p = p, exp_p = exp_p)
+}
+
+
+```
+
+Habitual ORL model with with standard frequency learning (Recovery)
+
+```{r}
+
+niter = 100
+
+# Empty arrays
+true_param = array(0, c(niter, 5))
+infer_param = array(0, c(niter, 5))
+  
+# Loop through each iteration
+for (n in 1:niter){
+  
+  # Draw random variables
+  Arew = round(runif(1, 0, 1), 2)
+  Apun = round(runif(1, 0, 1),2)
+  Ahab = round(runif(1, 0, 1), 2)
+  wf = round(rnorm(1, 0, 5),2)
+  whab = round(rnorm(1, 0, 5), 2)
+  
+  # Save to the true param array
+  true_param[n, 1] = Arew
+  true_param[n, 2] = Apun
+  true_param[n, 3] = Ahab
+  true_param[n, 4] = wf 
+  true_param[n, 5] = whab
+    
+  # run simulation function
+  sim = ORL_hab(session_n_dist, Arew, Apun, Ahab, whab, wf)
+  
+  # Recover parameters
+  dats = list(N = length(sim$x), x=sim$x, o = sim$r, sign = sign(sim$r))
+  samples <- stan(file = "Models/Recovery/ORL_HAB_recovery.stan", data = dats, cores = 2, chains = 4, iter = 4000, warmup = 1000)
+  
+  ext_samp = rstan::extract(samples)
+  
+  # Extract map
+  infer_param[n, 1] = map_estimate(ext_samp$Arew, precision = 12000)
+  infer_param[n, 2] = map_estimate(ext_samp$Apun, precision = 12000)
+  infer_param[n, 3] = map_estimate(ext_samp$Ahab, precision = 12000)
+  infer_param[n, 4] = map_estimate(ext_samp$wf, precision = 12000)
+  infer_param[n, 5] = map_estimate(ext_samp$whab, precision = 12000)
+
+  print(n)
+}
+
+
+```
+
+
+Plotting of ORL non frequency learning model
+
+```{r}
+
+# Potentially combine into one plot. Consider adding 90 % HDI to align more with Baysian approach
+
+plot1 = ggplot(data = data.frame(true = true_param[,1], inferred = infer_param[,1]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("Arew") + xlim(0,1) + ylim(0,1)
+
+plot2 = ggplot(data = data.frame(true = true_param[,2], inferred = infer_param[,2]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("Apun") + xlim(0,1) + ylim(0,1)
+
+plot3 = ggplot(data = data.frame(true = true_param[,3], inferred = infer_param[,3]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("Ahab") + xlim(0,1) +ylim(0,1)
+
+plot4 = ggplot(data = data.frame(true = true_param[,4], inferred = infer_param[,4]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("wf") + xlim(-10,10) + ylim(-10,10)
+
+plot5 = ggplot(data = data.frame(true = true_param[,5], inferred = infer_param[,5]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("whab") + xlim(-10,10) + ylim(-10,10)
+
+cowplot:: plot_grid(plot1, plot2, plot3, plot4 ,plot5)
+
+# Make on plot to rule them all 
+all_param = rbind(true_param, infer_param)
+
+all_param_scale = scale(all_param)
+
+param = data.frame(true_par=unlist(as.data.frame(all_param_scale[1:100,])))
+param$param = c(rep("Arew", 100), rep("Apun", 100), rep("Ahab",100), rep("wf", 100), rep("whab", 100))
+
+infer_param2 = data.frame(infer_par=unlist(as.data.frame(all_param_scale[101:200,])))
+
+param$infer_par = infer_param2$infer_par
+
+ggplot(param, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("ORL model recovery result") + ggeasy::easy_center_title()
+
+# Get descriptive values. MAE (Mean absolute error)
+param %>% group_by(param) %>% summarise(sum(abs(true_par-infer_par))/100)
+
+param %>% group_by(param) %>% summarise(rmse(true_par, infer_par))
+
+
+```
+
+
+VSE forward simulation model
+
+```{r}
+# Set up function
+VSE = function(session_n_dist, theta, decay, alfa, phi, C) {
+  ntrials = rgamma(n= 1, shape = as.numeric(session_n_dist$estimate[1]), rate = as.numeric(session_n_dist$estimate[2]))
+  x <- array(0, c(ntrials)) #choice
+  o <- array(0, c(ntrials)) #outcome
+  v <- array(0, c(ntrials)) #utility for the last outcome
+  Exploit <- array(0, c(ntrials, 8)) # How much you want to exploit each deck
+  Explore <- array(0, c(ntrials, 8)) # How much you want to explore each deck
+  u <- array(0, c(ntrials, 8)) # Combined explore and exploit signal 
+  exp_p <- array(0, c(ntrials, 8)) # Exponentiated Ev
+  p <- array(0, c(ntrials, 8)) # probabilities
+  
+  x[1] <- rcat(1, rep(0.125, 8))
+  o[1] <- rcauchy(1, location = outcome_dists$location_par[outcome_dists$game == x[1]], scale = outcome_dists$scale_par[outcome_dists$game == x[1]])
+  o[1] = o[1]/100
+  
+  for (t in 2:ntrials){
+    
+    v[t-1] = ifelse(o[t-1] > 0, o[t-1]^theta, -(abs(o[t-1])^theta))
+    
+    for (d in 1:8){
+      
+      Exploit[t,d] = ifelse(x[t-1] == d, Exploit[t-1,d]*decay + v[t-1], Exploit[t-1,d]*decay)
+      
+      Explore[t,d] = ifelse(x[t-1] == d, 0, Explore[t-1, d]+ alfa*(phi -Explore[t-1, d]))
+      
+      u[t,d] = (Exploit[t,d] + Explore[t,d])*C
+      
+      u[t,d] = ifelse(u[t,d] > 700, 700, u[t,d]) # Sort of hacky solution to avoid inf values
+      
+      exp_p[t,d] <- exp((u[t,d]))
+    }
+    
+    for (d in 1:8){
+      
+      p[t,d] <- exp_p[t,d]/sum(exp_p[t,])
+      
+    }
+    x[t] <- rcat(1, p[t,])
+    o[t] <- rcauchy(1, location = outcome_dists$location_par[outcome_dists$game == x[t]], scale = outcome_dists$scale_par[outcome_dists$game == x[t]])
+    o[t] = o[t]/100 # scale outcome
+  }
+  
+  results <- list(x=x, o=o, Exploit=Exploit, Explore = Explore)
+}
+
+
+```
+
+VSE sims
+
+```{r}
+
+VSE_sims = VSE(session_n_dist, 0.5, 0.8, 0.1, -8, 1)
+plot(VSE_sims$x)
+
+# The sequential exploration part doesn't appear to work to well with the participant data...
+
+```
+
+
+VSE parameter recovery
+
+```{r}
+
+niter = 100
+
+# Empty arrays
+true_param = array(0, c(niter, 5))
+infer_param = array(0, c(niter, 5))
+  
+# Loop through each iteration
+for (n in 1:niter){
+  
+  # Draw random variables
+  theta = round(runif(1, 0, 1), 2)
+  delta = round(runif(1, 0, 1),2)
+  alpha = round(runif(1, 0, 1), 2)
+  phi = round(rnorm(1, 0, 5),2)
+  C = round(runif(1, 0, 5), 2)
+  
+  # Save to the true param array
+  true_param[n, 1] = theta
+  true_param[n, 2] = delta
+  true_param[n, 3] = alpha
+  true_param[n, 4] = phi
+  true_param[n, 5] = C
+    
+  # run simulation function
+  sim = VSE(session_n_dist, theta, delta, alpha, phi, C) 
+  
+  # Recover parameters
+  dats = list(N = length(sim$x), x=sim$x, o = sim$o)
+  samples <- stan(file = "Models/Recovery/VSE_recovery.stan", data = dats, cores = 2, chains = 4, iter = 4000, warmup = 1000)
+   
+  ext_samp = rstan::extract(samples)
+  
+  # Extract map
+  infer_param[n, 1] = map_estimate(ext_samp$theta, precision = 12000)
+  infer_param[n, 2] = map_estimate(ext_samp$delta, precision = 12000)
+  infer_param[n, 3] = map_estimate(ext_samp$alpha, precision = 12000)
+  infer_param[n, 4] = map_estimate(ext_samp$phi, precision = 12000)
+  infer_param[n, 5] = map_estimate(ext_samp$C, precision = 12000)
+
+  print(n)
+}
+
+```
+
+
+Plot VSE recovery
+
+```{r}
+
+plot1 = ggplot(data = data.frame(true = true_param[,1], inferred = infer_param[,1]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("theta") + xlim(0,1) + ylim(0,1)
+
+plot2 = ggplot(data = data.frame(true = true_param[,2], inferred = infer_param[,2]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("delta") + xlim(0,1) + ylim(0,1)
+
+plot3 = ggplot(data = data.frame(true = true_param[,3], inferred = infer_param[,3]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("alpha") + xlim(0,1) + ylim(0,1)
+
+plot4 = ggplot(data = data.frame(true = true_param[,4], inferred = infer_param[,4]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("phi") + xlim(-10,10) + ylim(-10,10)
+
+plot5 = ggplot(data = data.frame(true = true_param[,5], inferred = infer_param[,5]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("beta") + xlim(0,5) + ylim(0,5)
+
+cowplot:: plot_grid(plot1, plot2, plot3, plot4, plot5)
+
+
+# Make on plot to rule them all 
+all_param = rbind(true_param, infer_param)
+
+all_param_scale = scale(all_param)
+
+param = data.frame(true_par=unlist(as.data.frame(all_param_scale[1:100,])))
+param$param = c(rep("theta", 100), rep("delta", 100), rep("alpha",100), rep("phi", 100), rep("beta", 100))
+
+infer_param2 = data.frame(infer_par=unlist(as.data.frame(all_param_scale[101:200,])))
+
+param$infer_par = infer_param2$infer_par
+
+ggplot(param, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("VSE model recovery result") + ggeasy::easy_center_title()
+
+# Get descriptive values. MAE (Mean absolute error)
+param %>% group_by(param) %>% summarise(sum(abs(true_par-infer_par))/100)
+
+param %>% group_by(param) %>% summarise(rmse(true_par, infer_par))
+
+
+```
+
+
+PVL delta model
+
+```{r}
+
+PVL_D = function(session_n_dist, w, A, a, c){
+  
+  ntrials = rgamma(n= 1, shape = as.numeric(session_n_dist$estimate[1]), rate = as.numeric(session_n_dist$estimate[2]))
+  x <- array(0, c(ntrials)) #choice
+  o <- array(0, c(ntrials)) #outcome
+  u <- array(0, c(ntrials, 8)) #utility for each deck
+  Ev <- array(0, c(ntrials, 8)) # Expected utility
+  Ev_update <- array(0, c(ntrials, 8)) # Trick to update expected utility 
+  exp_p <- array(0, c(ntrials, 8)) # Exponentiated Ev
+  p <- array(0, c(ntrials, 8)) # probabilities
+  
+  x[1] <- rcat(1, rep(0.125, 8))
+  o[1] <- rcauchy(1, location = outcome_dists$location_par[outcome_dists$game == x[1]], scale = outcome_dists$scale_par[outcome_dists$game == x[1]])
+  
+  o[1] = o[1]/100
+  
+  #theta = 3^c-1
+  
+  for (t in 2:ntrials){
+    
+    for (d in 1:8){
+      u[t,d] <- ifelse(o[t-1] < 0, -w*abs(o[t-1])^A, (abs(o[t-1]))^A)
+      
+      Ev_update[t,d] <- Ev[t-1,d]+ a*(u[t,d] - Ev[t-1,d])
+      
+      Ev[t,d] <- ifelse(x[t-1] ==d, Ev_update[t,d], Ev[t-1,d])
+      
+      Ev_temp = c*Ev[t,d]
+      
+      Ev_temp = ifelse(Ev_temp > 700, 700, Ev_temp)
+      
+      exp_p[t,d] <- exp(Ev_temp)
+    }
+    
+    for (d in 1:8){
+      
+      p[t,d] <- exp_p[t,d]/sum(exp_p[t,])
+      
+    }
+    
+    x[t] <- rcat(1, p[t,])
+    o[t] <- rcauchy(1, location = outcome_dists$location_par[outcome_dists$game == x[t]], scale = outcome_dists$scale_par[outcome_dists$game == x[t]])
+    o[t] = o[t]/100
+  }
+  
+  results <- list(x=x, o=o, Ev=Ev)
+  
+}
+
+```
+
+
+PVL delta sims
+```{r}
+PVL_sims = PVL_D(session_n_dist, 2, 0.9, 0.1, 4)
+plot(PVL_sims$x)
+```
+
+PVL delta recover 
+
+```{r}
+niter = 100
+
+# Empty arrays
+true_param = array(0, c(niter, 4))
+infer_param = array(0, c(niter, 4))
+  
+# Loop through each iteration
+for (n in 1:niter){
+  
+  # Draw random variables
+  w = round(runif(1, 0, 5), 2)
+  A = round(runif(1, 0, 1), 2)
+  a = round(runif(1, 0, 1), 2)
+  c = round(runif(1, 0, 5), 2)
+  
+  # Save to the true param array
+  true_param[n, 1] = w
+  true_param[n, 2] = A
+  true_param[n, 3] = a
+  true_param[n, 4] = c
+    
+  # run simulation function
+  sim = PVL_D(session_n_dist, w, A, a, c) 
+  
+  # Recover parameters
+  dats = list(N = length(sim$x), x=sim$x, o = sim$o)
+  samples <- stan(file = "Models/REcovery/PVL_recovery.stan", data = dats, cores = 2, chains = 4, iter = 4000, warmup = 1000)
+   
+  ext_samp = rstan::extract(samples)
+  
+  # Extract map
+  infer_param[n, 1] = map_estimate(ext_samp$w, precision = 12000)
+  infer_param[n, 2] = map_estimate(ext_samp$A, precision = 12000)
+  infer_param[n, 3] = map_estimate(ext_samp$a, precision = 12000)
+  infer_param[n, 4] = map_estimate(ext_samp$c, precision = 12000)
+
+  print(n)
+}
+
+```
+
+Plot PVL-delta recovery
+
+```{r}
+
+plot1 = ggplot(data = data.frame(true = true_param[,1], inferred = infer_param[,1]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("w") + xlim(0,5) + ylim(0,5)
+
+plot2 = ggplot(data = data.frame(true = true_param[,2], inferred = infer_param[,2]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("A") + xlim(0,1) + ylim(0,1)
+
+plot3 = ggplot(data = data.frame(true = true_param[,3], inferred = infer_param[,3]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("a") + xlim(0,1) + ylim(0,1)
+
+plot4 = ggplot(data = data.frame(true = true_param[,4], inferred = infer_param[,4]), aes(x = true, y = inferred)) + geom_point()+ theme_bw() + geom_abline() + ggtitle("c") + xlim(0,5) + ylim(0,5)
+
+cowplot:: plot_grid(plot1, plot2, plot3, plot4)
+
+# Make on plot to rule them all 
+all_param = rbind(true_param, infer_param)
+
+all_param_scale = scale(all_param)
+
+param = data.frame(true_par=unlist(as.data.frame(all_param_scale[1:100,])))
+param$param = c(rep("w", 100), rep("A", 100), rep("a",100), rep("c", 100))
+
+infer_param2 = data.frame(infer_par=unlist(as.data.frame(all_param_scale[101:200,])))
+
+param$infer_par = infer_param2$infer_par
+
+ggplot(param, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("PVL-Delta model recovery result") + ggeasy::easy_center_title()
+
+# Get descriptive values. MAE (Mean absolute error)
+param %>% group_by(param) %>% summarise(sum(abs(true_par-infer_par))/100)
+# RMSE
+param %>% group_by(param) %>% summarise(rmse(true_par, infer_par))
+
+```
+
+Create one plot with all parameter recovery results
+
+```{r}
+
+ORL = readRDS(file = "Results/ORL_recover_Ktr.rds")
+ORL2 = readRDS(file = "Results/ORL2_recover_results.rds")
+ORL3 = readRDS(file = "Results/HabitOnlyORL.rds")
+PVL = readRDS(file = "Results/PVLD_recovery_results.rds")
+VSE = readRDS(file = "Results/VSE_recovery_results.rds")
+
+VSE$param[VSE$param == "beta"] = "c"
+ORL3$param[ORL3$param == "Apun"] = "Aloss"
+ORL2$param[ORL2$param == "AHab"] = "Ahab"
+
+PVL_plot = ggplot(PVL, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("PVL-Delta model") + ggeasy::easy_center_title()
+
+VSE_plot =ggplot(VSE, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("VSE model") + ggeasy::easy_center_title() 
+
+ORL_plot = ggplot(ORL, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("ORL model") + ggeasy::easy_center_title()
+
+ORL2_plot = ggplot(ORL2, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("Habitual + within session frequency ORL model") + ggeasy::easy_center_title()
+
+ORL3_plot = ggplot(ORL3, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("Habitual ORL modelt") + ggeasy::easy_center_title() 
+
+cowplot::plot_grid(PVL_plot, VSE_plot, ORL_plot, ORL3_plot, ORL2_plot, nrow = 3, ncol = 2)
+
+```
