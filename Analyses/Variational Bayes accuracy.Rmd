@@ -1,0 +1,173 @@
+---
+title: "Variational Bayes accuracy"
+author: "Simon A. M. Hansen"
+date: "5/2/2021"
+output: html_document
+---
+
+Data prep
+
+```{r}
+library(pacman)
+p_load(dplyr, rstan, bayestestR, loo, ggplot2, lubridate, tidyr)
+
+split_tibble <- function(tibble, column = 'col') {
+  tibble %>% split(., .[,column]) %>% lapply(., function(x) x[,setdiff(names(x),column)])
+}
+
+setwd("~/Cognitive model")
+
+data = read.csv("Data/session1000_wExpertRatings.csv", row.names =  1)
+
+data = data[between(month(data$time_first), 4, 6),]
+
+count_temp = data %>% count(profile_id) 
+
+ID_more100 = count_temp$profile_id[count_temp$n >= 100]
+
+data2 = data %>% filter(profile_id %in% ID_more100)
+
+```
+
+
+Loop that makes one MCMC sampling and 10 variational bayes for 100 participants random pariticipants with more than 100 sessions during the data window
+
+```{r}
+
+ID_sub = sample(ID_more100, 100)
+
+results = data.frame(ID = 0, run = 0, Arew = 0, Apun = 0, Ahab = 0, wf = 0, whab = 0, comp_time = 0)
+
+n = 1
+
+for (id in ID_sub){
+  
+  ind_dat = data2[data2$profile_id == id,]
+  
+  # Outcome
+  o_trajec = ind_dat$outcome/ind_dat$sesion_length
+
+  # Win frequency
+  freq = (ind_dat$wins + ind_dat$LDW)/ind_dat$sesion_length  
+
+  # Sign of outcome
+  sign = sign(o_trajec)
+
+  # Choice
+  x  = ind_dat$game
+  
+  # Number of spins
+  N = length(x)
+  
+  dats = list(o= o_trajec, sign = sign, x = x, N = N)
+  
+  start_time=Sys.time()
+  mcmc_fit = stan("Models/Recovery/ORL_HAB_recovery.stan", data= dats,  chains = 4, iter = 4000, warmup = 1500, cores = 2)
+  end_time = Sys.time()
+  sample_time = end_time - start_time
+  
+  ext = rstan::extract(mcmc_fit, pars = c("Arew", "Apun", "Ahab", "wf", "whab"))
+  
+  temp = data.frame(ID = rep(id, 10000), run = rep("mcmc", 10000), Arew = ext[1], Apun = ext[2], Ahab = ext[3], wf = ext[4], whab = ext[5], comp_time = rep(sample_time, 10000))
+  
+  results = rbind(results, temp)
+  
+  model = stan_model(file = "Models/Recovery/ORL_HAB_recovery.stan")
+  
+  for (i in 1:10){
+    start_time=Sys.time()
+    vb_fit = vb(model, dats)
+    end_time = Sys.time()
+    VI_time = end_time - start_time
+    
+    ext = rstan::extract(vb_fit, pars = c("Arew", "Apun", "Ahab", "wf", "whab"))
+    
+    temp = data.frame(ID = rep(id, 1000), run = rep(i, 1000), Arew = ext[1], Apun = ext[2], Ahab = ext[3], wf = ext[4], whab = ext[5], comp_time = rep(VI_time, 1000))
+    
+    results = rbind(results, temp)
+  }
+  
+  print(n)
+  
+  n= n+1
+}
+```
+
+
+Plot performance. How may we combine all the info into one plot? 
+
+```{r}
+results = results[results$ID != 0,] # Remove empty first data point
+
+ID_plot = sample(ID_sub, 12)
+
+results_p = results %>% filter(ID %in% ID_plot)
+
+ggplot() + geom_histogram(data = results_p[results_p$run == "mcmc",], aes(x=Arew, y= ..density..)) + geom_density(data = results_p[results_p$run != "mcmc",], aes(x= Arew, colour = run)) + facet_wrap(~ID, scale = "free") + theme_bw() + theme(legend.position = "none") + scale_colour_manual(values = alpha(rep("blue", 10), 0.3))
+
+ggplot() + geom_histogram(data = results_p[results_p$run == "mcmc",], aes(x=Apun, y= ..density..)) + geom_density(data = results_p[results_p$run != "mcmc",], aes(x= Apun, colour = run)) + facet_wrap(~ID, scale = "free") + theme_bw() + theme(legend.position = "none") + scale_colour_manual(values = alpha(rep("blue", 10), 0.3))
+
+ggplot() + geom_histogram(data = results_p[results_p$run == "mcmc",], aes(x=Ahab, y=..density..)) + geom_density(data = results_p[results_p$run != "mcmc",], aes(x= Ahab, colour = run)) + facet_wrap(~ID, scale = "free") + theme_bw() + theme(legend.position = "none") + scale_colour_manual(values = alpha(rep("blue", 10), 0.3))
+
+ggplot() + geom_histogram(data = results_p[results_p$run == "mcmc",], aes(x=wf, y=..density..)) + geom_density(data = results_p[results_p$run != "mcmc",], aes(x= wf, colour = run)) + facet_wrap(~ID, scale = "free") + theme_bw() + theme(legend.position = "none") + scale_colour_manual(values = alpha(rep("blue", 10), 0.3))
+
+ggplot() + geom_histogram(data = results_p[results_p$run == "mcmc",], aes(x=whab, y=..density..)) + geom_density(data = results_p[results_p$run != "mcmc",], aes(x= whab, colour = run)) + facet_wrap(~ID, scale = "free") + theme_bw() + theme(legend.position = "none") + scale_colour_manual(values = alpha(rep("blue", 10), 0.3))
+
+```
+
+Get computation time
+
+```{r}
+
+comp_res=results %>% group_by(ID, run) %>% summarise(comp_time = mean(comp_time))
+
+# Number of sessions per player
+n_session=count_temp %>% filter(profile_id %in% ID_sub)
+
+comp_res = merge(comp_res, n_session, by.x = "ID", by.y = "profile_id")
+
+# How much faster i variational bayes on average
+VItimes= comp_res %>% group_by(ID) %>% filter(run != "mcmc") %>% summarize(meanVItime =mean(comp_time))
+MCMCtimes = comp_res[comp_res$run == "mcmc",]
+meancomptimes = merge(VItimes, MCMCtimes, by = "ID") 
+
+meancomptimes$comp_time= ifelse(meancomptimes$comp_time < 20, meancomptimes$comp_time*60, meancomptimes$comp_time)
+
+# Make plot of computation time and number of sessions
+ggplot(meancomptimes[meancomptimes$run == "mcmc",], aes(x=n, y= comp_time)) + geom_point() 
+
+meancomptimes$ratio = meancomptimes$comp_time/meancomptimes$meanVItime
+
+range(meancomptimes$ratio)
+
+mean(meancomptimes$ratio)
+
+# Make plot of computation time and number of sessions
+ggplot(meancomptimes, aes(x=n, y= meanVItime)) + geom_point() 
+```
+
+
+Plot of VI performance
+```{r}
+
+MAP_MCMC = results %>% filter(run == "mcmc") %>% group_by(ID) %>% summarise(Arew = as.numeric(map_estimate(Arew, 10000)), Aloss = as.numeric(map_estimate(Apun, 10000)), Ahab = as.numeric(map_estimate(Ahab, 10000)), wf = as.numeric(map_estimate(wf, 10000)), whab = as.numeric(map_estimate(whab, 10000)))
+
+results = results[results$ID != 21971,] # Removed because MAP could not be estimated for one of the participants parameters
+
+MAP_VI = results %>% filter(run != "mcmc") %>% group_by(ID, run) %>% summarise(map_arew = as.numeric(map_estimate(Arew, 1000)), map_apun = as.numeric(map_estimate(Apun, 1000)), map_ahab = as.numeric(map_estimate(Ahab, 1000)), map_wf = as.numeric(map_estimate(wf, 1000)), map_whab = as.numeric(map_estimate(whab, 1000)))
+
+
+sum_MAP_VI = MAP_VI %>% group_by(ID) %>% summarise(Arew = mean(map_arew), Aloss = mean(map_apun), Ahab = mean(map_ahab), wf = mean(map_wf), whab = mean(map_whab))
+
+MCMC_long = gather(MAP_MCMC, parameter, mcmc, Arew:whab)
+
+VI_long =gather(sum_MAP_VI, parameter, VI, Arew:whab)
+
+all_maps_long = merge(MCMC_long, VI_long, by = c("ID", "parameter"))
+
+ggplot(all_maps_long, aes(x = mcmc, y= VI)) + geom_point() + facet_wrap(~parameter, scale = "free") + geom_abline() + theme_bw() + xlab("MCMC sampling MAP estimate") + ylab("Mean VI MAP estimate")
+
+
+
+```
+

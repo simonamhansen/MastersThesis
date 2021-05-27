@@ -1,0 +1,215 @@
+---
+title: "Preliminary analysis"
+output: html_document
+---
+
+Read in session level data for the 1000 players that was rated by the expert
+```{r}
+pacman::p_load(ggplot2, plyr, dplyr, lubridate)
+
+setwd("~/Cognitive model")
+
+data = read.csv("Data/session1000_wExpertratings.csv", row.names =  1)
+
+# Only consider the last 3 months of the data, which was the expert was presented with, when making their evaluation of the gambling behaviour
+data2 = data[month(data$time_first) >= 4,]
+
+count_temp = data %>% count(profile_id) 
+
+RT_data = read.csv("Data/MeanRT.csv", row.names = 1) 
+
+```
+
+
+Helper functions (run this)
+
+```{r}
+summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+
+    # New version of length which can handle NA's: if na.rm==T, don't count them
+    length2 <- function (x, na.rm=FALSE) {
+        if (na.rm) sum(!is.na(x))
+        else       length(x)
+    }
+
+    # This does the summary. For each group's data frame, return a vector with
+    # N, mean, and sd
+    datac <- ddply(data, groupvars, .drop=.drop,
+      .fun = function(xx, col) {
+        c(N    = length2(xx[[col]], na.rm=na.rm),
+          mean = mean   (xx[[col]], na.rm=na.rm),
+          sd   = sd     (xx[[col]], na.rm=na.rm)
+        )
+      },
+      measurevar
+    )
+
+    # Rename the "mean" column    
+    datac <- rename(datac, c("mean" = measurevar))
+
+    datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+
+    # Confidence interval multiplier for standard error
+    # Calculate t-statistic for confidence interval: 
+    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+    datac$ci <- datac$se * ciMult
+
+    return(datac)
+}
+```
+
+
+Favorite game - No clear difference
+```{r}
+
+ggplot(data2, aes(game)) +geom_bar() # Game 8 is a clear favorite
+
+ggplot(data2, aes(x= game, y= sesion_length)) + stat_summary(geom = "bar") # No huge difference between game
+
+ggplot(data2, aes(Risk.score)) + geom_density() # Might be good to cut of the top of the people who score high on the risk score to balance out the sample. Should remove people who play mostly bingo!
+
+# Find favorite game
+Game_counts = data2 %>% group_by(profile_id) %>% count(game)
+fav_game = Game_counts %>% group_by(profile_id) %>% filter(n == max(n))
+
+ggplot(fav_game, aes(game)) + geom_bar()
+
+risk_score_dat = data2 %>% select(profile_id, Risk.score) %>% group_by(profile_id) %>% dplyr::summarise(profile_id = mean(profile_id), risk_score = mean(Risk.score))
+
+fav_game2 = merge(fav_game, risk_score_dat, by = "profile_id")
+
+summary = summarySE(fav_game2, measurevar = "risk_score", groupvars = "game")
+
+ggplot(summary, aes(x=game, y=risk_score)) + 
+    geom_bar(position=position_dodge(), stat="identity") +
+    geom_errorbar(aes(ymin=risk_score-sd, ymax=risk_score+sd),
+                  width=.2,                    # Width of the error bars
+                  position=position_dodge(.9))
+
+
+```
+
+Switching behaviour - Less swithing behaviour in high risk players
+
+```{r}
+data2 = data2 %>% group_by(profile_id) %>% mutate(switch = c(0,ifelse(diff(game) != 0, 1, 0)))
+
+switch_sum = data2 %>% group_by(profile_id) %>% dplyr::summarise(mean_switch = mean(switch))
+
+switch_sum2 = merge(switch_sum, risk_score_dat, by = "profile_id")
+
+ggplot(switch_sum2, aes(x=mean_switch)) + geom_density()
+
+ggplot(switch_sum2, aes(mean_switch)) + geom_density()
+ggplot(switch_sum2, aes(x= mean_switch, y= risk_score)) + geom_point() + geom_smooth(method = "lm")
+ggplot(switch_sum2, aes(y= mean_switch, x= risk_score)) + geom_point() + geom_smooth(method = "lm")
+
+rand_ID6=sample(data2$profile_id, 6)
+
+sub_data = data2[data2$profile_id %in% rand_ID6,]
+
+ggplot(sub_data, aes(x = session_no, y = game, colour = Risk.score)) + geom_point() + facet_wrap(~profile_id)
+
+```
+
+Session length - Longer average session length for high risk players
+
+```{r}
+
+sum_length = data2 %>% group_by(profile_id) %>% dplyr::summarise(mean_length = mean(sesion_length))
+
+sum_length2 = merge(sum_length, risk_score_dat, by = "profile_id")
+
+ggplot(sum_length2, aes(x= mean_length)) + geom_density()
+
+ggplot(sum_length2, aes(x =risk_score, y = mean_length)) + geom_point() + geom_smooth(method = "lm")
+
+```
+
+
+Stake behaviour - High average stake size by risk score & high sd on the stake size. the mean and variance are highly correlated so it probably only make sense to include one
+
+```{r}
+
+sum_stake= na.omit(data2) %>% group_by(profile_id) %>% dplyr::summarise(mean_stake = mean(avg_stake_size), sd_stake = sd(avg_stake_size))
+
+sum_stake2 = merge(sum_stake, risk_score_dat, by = "profile_id")
+
+ggplot(sum_stake2, aes(x= mean_stake)) + geom_density()
+
+ggplot(sum_stake2, aes(x =risk_score, y = mean_stake)) + geom_point() + geom_smooth(method = "lm")
+ggplot(sum_stake2, aes(x =risk_score, y = sd_stake)) + geom_point() + geom_smooth(method = "lm")
+ggplot(sum_stake2, aes(x =mean_stake, y = sd_stake)) + geom_point() + geom_smooth(method = "lm")
+
+```
+
+Pause between sessions behaviour - Players with a higher risk score has lower pauses between sessions. 
+```{r}
+
+data_gl = read.csv("Data/listgames_session1000_wExpertratings.csv", row.names =  1)
+
+id_list = unique(data_gl$profile_id)
+
+# get pausetime
+subjects = data.frame(ID = NA, pause = NA)
+for (id in id_list){
+  one_subject = data_gl[data_gl$profile_id == id,]
+
+  one_subject$time_first = as_datetime(one_subject$time_first)
+  one_subject$time_last = as_datetime(one_subject$time_last)
+
+  temp_list = c()
+  for (i in 2:length(one_subject$time_first)){
+    temp = difftime(one_subject$time_first[i], one_subject$time_last[i-1], units = "hours")
+    temp_list = c(temp_list, temp)
+  }
+  
+  id_list = rep(id, length(temp_list))
+  temp_dat = data.frame(ID= id_list, pause= temp_list)
+  subjects= rbind(subjects, temp_dat)
+  
+}
+
+pause_data = na.omit(subjects)
+
+sum_pause= na.omit(pause_data) %>% group_by(ID) %>% dplyr::summarise(mean_pause = mean(pause), sd_pause = sd(pause))
+
+sum_pause2 = merge(sum_pause, risk_score_dat, by.x = "ID", by.y = "profile_id")
+
+ggplot(sum_pause2, aes(x= mean_pause)) + geom_density()
+
+ggplot(sum_pause2, aes(x =risk_score, y = mean_pause)) + geom_point() + geom_smooth(method = "lm")
+ggplot(sum_pause2, aes(x =risk_score, y = sd_pause)) + geom_point() + geom_smooth(method = "lm")
+ggplot(sum_pause2, aes(x =mean_pause, y = sd_pause)) + geom_point() + geom_smooth(method = "lm")
+
+```
+
+Merge all behavioural variables and create a linear model
+
+```{r}
+
+RT_sum = RT_data %>% select(profile_id, mean.RT., sd.RT.)
+
+temp1 = merge(RT_sum, switch_sum, by = "profile_id")
+
+temp2 = merge(temp1, sum_length, by = "profile_id")
+
+temp3 = merge(temp2, sum_stake, by = "profile_id")
+
+temp4 = merge(temp3, sum_pause, by.x = "profile_id" , by.y = "ID")
+
+beh_dat = merge(temp4, risk_score_dat, by = "profile_id")
+
+write.csv(beh_dat, "BehSum.csv")
+
+beh_dat =read.csv("BehaviouralSummary.csv")
+
+beh_model = lm(risk_score ~  scale(mean_length) + scale(mean_switch) + scale(mean_stake) + scale(mean.RT.) + scale(mean_pause), beh_dat)
+
+summary(beh_model)
+
+
+```
+

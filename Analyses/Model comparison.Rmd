@@ -1,0 +1,212 @@
+---
+title: "ORL_run"
+output: html_document
+---
+
+Data prep
+
+```{r}
+library(pacman)
+p_load(dplyr, rstan, bayestestR, loo, lubridate)
+
+split_tibble <- function(tibble, column = 'col') {
+  tibble %>% split(., .[,column]) %>% lapply(., function(x) x[,setdiff(names(x),column)])
+}
+
+setwd("~/Cognitive model")
+
+data = read.csv("Data/session1000_wExpertRatings.csv", row.names =  1)
+
+data = data[between(month(data$time_first), 4, 6),]
+
+count_temp = data %>% count(profile_id) 
+
+count_more100 = count_temp[count_temp$n >= 100,]
+
+mean(count_more100$n)
+
+ID_more100sub = readRDS("subsetformodelcomparison.rds")
+
+ID_more100 = count_temp$profile_id[count_temp$n >= 100]
+
+data2 = data %>% filter(profile_id %in% ID_more100sub)
+
+s = length(unique(data2$profile_id)) # Number of subjects
+
+Tsubj = data2 %>% group_by(profile_id) %>% summarise(ses_n = length(session_no)) # Number of sessions per subject
+Tsubj = Tsubj$ses_n
+ 
+tol_ses = sum(Tsubj) # 80695 total length
+
+# Outcome
+o = data2$outcome
+o_scaled = o/100
+o_trajec = data2$outcome/data2$sesion_length
+
+# Win frequency
+data2$win_freq = (data2$wins + data2$LDW)/data2$sesion_length  
+freq = data2$win_freq
+
+# Sign of outcome
+sign = sign(o)
+
+# Choice
+x  = data2$game
+
+# Risk score
+risk = data2 %>% group_by(profile_id) %>% summarise(mean(Risk.score))
+risk = risk$`mean(Risk.score)` 
+```
+
+ORL fit
+```{r}
+dat = list(N=tol_ses, Tsubj = Tsubj, s =s, o=o_trajec, sign= sign, x=x)
+
+model = stan_model("Models/Recovery/ORL_ind.stan")
+
+fit = vb(model, dat, output_samples = 999)
+
+predictions = extract(fit, pars = c("y_pred"))
+
+mean(apply(predictions$y_pred, c(2), median) == x)
+
+med_pred = apply(predictions$y_pred, c(2), median)
+
+switch_dat= ifelse(diff(x) == 0, 0, 1) 
+switch_pred = ifelse(diff(med_pred) == 0,0,1)
+
+mean(switch_pred == switch_dat) 
+mean(switch_pred) 
+mean(switch_dat)
+
+loglik=extract_log_lik(fit, parameter_name = "log_lik")
+
+loo(loglik)
+
+```
+
+
+VSE model fit
+```{r}
+dat = list(N=tol_ses, Tsubj = Tsubj, s =s, o=o_trajec, x=x)
+
+#model = stan_model("Models/Recovery/VSE_ind.stan")
+#VSE_fit = vb(model, dat, tol_rel_obj = 0.001, output_samples = 999) 
+
+VSE_fit = stan(file = "Models/Recovery/VSE_ind.stan", data = dat, cores = 4, chains = 4, iter = 4000, warmup =  1500, thin = 2)
+
+# Extract log likelihood 
+loglik=extract_log_lik(VSE_fit, parameter_name = "log_lik", merge_chains = TRUE)
+loo(loglik)
+
+predictions = extract(VSE_fit, pars = c("y_pred"))
+
+mean(apply(predictions$y_pred, c(2), median) == x) 
+
+med_pred = apply(predictions$y_pred, c(2), median)
+
+plot(x[sum(Tsubj[1:14]):sum(Tsubj[1:15])])
+plot(med_pred[sum(Tsubj[1:14]):sum(Tsubj[1:15])])
+
+switch_dat= ifelse(diff(x) == 0, 0, 1)
+switch_pred = ifelse(diff(med_pred) == 0,0,1)
+
+mean(switch_pred == switch_dat) 
+mean(switch_pred) 
+mean(switch_dat)
+
+```
+
+PVLD model fit
+
+```{r}
+
+dat = list(N=tol_ses, Tsubj = Tsubj, s=s, o=o_trajec, x=x)
+
+model = stan_model("Models/Recovery/PVLD_ind.stan")
+
+PVL_fit = vb(model, dat, tol_rel_obj = 0.001, output_samples = 999) 
+
+predictions = extract(PVL_fit, pars = c("y_pred"))
+
+mean(apply(predictions$y_pred, c(2), median) == x) 
+
+med_pred = apply(predictions$y_pred, c(2), median)
+
+plot(x[Tsubj[14]:Tsubj[15]])
+plot(med_pred[Tsubj[14]:Tsubj[15]])
+
+switch_dat= ifelse(diff(x) == 0, 0, 1)
+switch_pred = ifelse(diff(med_pred) == 0,0,1)
+
+mean(switch_pred == switch_dat) 
+mean(switch_pred) 
+mean(switch_dat)
+
+loglik=extract_log_lik(PVL_fit, parameter_name = "log_lik", merge_chains = TRUE)
+loo(loglik)
+
+```
+
+Habitual ORL fit 
+
+
+```{r}
+dat = list(N=tol_ses, Tsubj = Tsubj, s =s, o=o_trajec, sign = sign, x=x)
+
+model = stan_model("Models/Recovery/ORL_HAB_ind.stan")
+
+fit = vb(model, dat, tol_rel_obj = 0.001, output_samples = 999)
+
+predictions = extract(fit, pars = c("y_pred"))
+
+mean(apply(predictions$y_pred[1:999,], c(2), median) == x) 
+
+med_pred = apply(predictions$y_pred[1:999,], c(2), median)
+
+switch_dat= ifelse(diff(x) == 0, 0, 1)
+switch_pred = ifelse(diff(med_pred) == 0,0,1)
+
+plot(switch_dat[107:260])
+plot(switch_pred[107:260])
+
+mean(switch_pred == switch_dat) 
+mean(switch_pred) 
+mean(switch_dat)
+
+loglik=extract_log_lik(fit, parameter_name = "log_lik", merge_chains = TRUE)
+loo(loglik)
+
+
+```
+
+Habitual + win frequency ORL fit
+
+```{r}
+dat = list(N=tol_ses, Tsubj = Tsubj, s =s, o=o_trajec, freq= freq, x=x)
+
+model = stan_model("Models/Recovery/ORL2_ind.stan")
+
+fit = vb(model, dat, tol_rel_obj = 0.001, output_samples = 999)
+
+predictions = extract(fit, pars = c("y_pred"))
+
+mean(apply(predictions$y_pred[1:999,], c(2), median) == x) 
+
+med_pred = apply(predictions$y_pred[1:999,], c(2), median)
+
+switch_dat= ifelse(diff(x) == 0, 0, 1)
+switch_pred = ifelse(diff(med_pred) == 0,0,1)
+
+plot(switch_dat[107:260])
+plot(switch_pred[107:260])
+
+mean(switch_pred == switch_dat) 
+mean(switch_pred) 
+mean(switch_dat)
+
+loglik=extract_log_lik(fit, parameter_name = "log_lik", merge_chains = TRUE)
+loo(loglik)
+
+```
+
