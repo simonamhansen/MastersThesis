@@ -20,7 +20,7 @@ CreateCognitiveProfile = function(data, n_games, method = "NUTS", model = "ORL_H
   if (model == "VSE") param_list = c("theta", "delta", "alpha", "phi", "c")
   
   if (model %in% available_models == FALSE){
-    print(paste("Model not available. Choose a model from the following list:", paste(unlist(available_models), collapse = ', '), sep = " "))
+    stop(paste("Model not available. Choose a model from the following list:", paste(unlist(available_models), collapse = ', '), sep = " "))
   }
   
   # Check that the required packages are installed. If not the packages are installed automatically.
@@ -72,8 +72,7 @@ CreateCognitiveProfile = function(data, n_games, method = "NUTS", model = "ORL_H
     } else if (method == "VB") {
       fit = vb(cog_model, dats, tol_rel_obj = 0.005, output_samples = 5000, refresh = 0)
     } else {
-      print("The chosen method is not supported by the algorithm. Please input 'NUTS' for MCMC sampling and 'VB' for Variational Inference.")
-      break
+      stop("The chosen method is not supported by the algorithm. Please input 'NUTS' for MCMC sampling and 'VB' for Variational Inference.")
     }
       
     ext_samp = rstan::extract(fit)
