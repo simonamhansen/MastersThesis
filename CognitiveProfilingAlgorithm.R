@@ -3,11 +3,11 @@
 # Before running the function make sure that you have a C++ Toolchain installed. Please see https://github.com/stan-dev/rstan/wiki/RStan-Getting-Started for instructions.
 
 # As a user you need to input the data to the algorithm. Further you may specify estimation method, model, minimum number of sessions for inclusion of the player. 
-# Lastly you may decide whether you want to save the full posterior, the 95 % High Density Interval and whether progress should be printed.
+# Lastly you may decide whether the 89 % High Density Interval should be estimated and whether progress should be printed.
 # Notice that keeping the full posterior results in very large datafiles.
 # Notice that Variational Bayes (VB) may provide inaccurate estimates but is significantly faster than the No-U-Turn Sampler (NUTS), which is the default of this algorithm.
 
-CreateCognitiveProfile = function(data, method = "NUTS", model = "ORL_HAB", min_ses = 80, keep_full_posterior = F, output_HDI = T, print_progress = T){ 
+CreateCognitiveProfile = function(data, n_games, method = "NUTS", model = "ORL_HAB", min_ses = 80, output_HDI = T, print_progress = T){ 
   
   # Check if the chosen model is available
   available_models = c("PVLD", "VSE", "ORL", "ORL_HAB", "ORL_HAB_FREQ")
@@ -32,26 +32,21 @@ CreateCognitiveProfile = function(data, method = "NUTS", model = "ORL_HAB", min_
   
   if (output_HDI == TRUE) {
     HDI_data = data.frame(ID = character(), param1 = numeric(), param2 = numeric(), param3 = numeric(), param4 =  numeric(), param5 = numeric())
-    if (model == "PVLD") HDI_dat = HDI_dat[,-6]
-  }
-  
-  if (keep_full_posterior == TRUE){
-    full_posterior = data.frame(ID = character(), param1 = numeric(), param2 = numeric(), param3 = numeric(), param4 =  numeric(), param5 = numeric())
-    if (model == "PVLD") full_posterior = full_posterior[,-6]
+    if (model == "PVLD") HDI_data = HDI_data[,-6]
   }
   
   n = 1 # Iterations counter
   
   # Only select players with more than the minimum number of sessions
   counts = data %>% count(ID)
-  IDS = counts$ID[counts$n >= min_ses,]
+  IDS = counts$ID[counts$n >= min_ses]
   
   # Chose how many cores to use for NUTS or load model for Variational Bayes
   if (method == "NUTS"){      
     n_cores_available = detectCores() 
     n_cores= ifelse(n_cores_available > 4, 4, n_cores_available-1) 
   }else if (method == "VB"){
-    model = stan_model(str_glue("Models/{model}.stan"))
+    cog_model = stan_model(str_glue("Models/{model}.stan"))
   }
   
   for (id in IDS){ # Loop through all players
@@ -65,17 +60,17 @@ CreateCognitiveProfile = function(data, method = "NUTS", model = "ORL_HAB", min_
     
     if (model == "ORL_HAB_FREQ"){
       freq = temp$win_freq
-      dats = list(N = N, o = o, freq = freq, x = x)
+      dats = list(N = N, o = o, freq = freq, x = x, n_games = n_games)
     } else {
       sign = sign(o)
-      dats = list(N = N, o = o, sign = sign, x = x)
+      dats = list(N = N, o = o, sign = sign, x = x, n_games = n_games)
     }
     
     # Fit model & extract samples  
     if (method == "NUTS"){
-      fit=stan(file="Models/{model}.stan", data = dats, cores = n_cores, chains = 4, warmup = 1500, iter = 4000)
+      fit=stan(file=str_glue("Models/{model}.stan"), data = dats, cores = n_cores, chains = 4, warmup = 1500, iter = 4000)
     } else if (method == "VB") {
-      fit = vb(model, dats, tol_rel_obj = 0.001, output_samples = 10000)
+      fit = vb(cog_model, dats, tol_rel_obj = 0.005, output_samples = 5000, refresh = 0)
     } else {
       print("The chosen method is not supported by the algorithm. Please input 'NUTS' for MCMC sampling and 'VB' for Variational Inference.")
       break
@@ -84,11 +79,11 @@ CreateCognitiveProfile = function(data, method = "NUTS", model = "ORL_HAB", min_
     ext_samp = rstan::extract(fit)
       
     # Estimate MAP & append to dataframe
-    param1_MAP = map_estimate(ext_samp[1])
-    param2_MAP = map_estimate(ext_samp[2])
-    param3_MAP = map_estimate(ext_samp[3])
-    param4_MAP = map_estimate(ext_samp[4])
-    if (model != "PVLD") param5_MAP = map_estimate(ext_samp[5])
+    param1_MAP = map_estimate(ext_samp[[1]])
+    param2_MAP = map_estimate(ext_samp[[2]])
+    param3_MAP = map_estimate(ext_samp[[3]])
+    param4_MAP = map_estimate(ext_samp[[4]])
+    if (model != "PVLD") param5_MAP = map_estimate(ext_samp[[5]])
       
     if (model == "PVLD"){
       results = c(id, param1_MAP, param2_MAP, param3_MAP, param4_MAP)
@@ -96,16 +91,15 @@ CreateCognitiveProfile = function(data, method = "NUTS", model = "ORL_HAB", min_
       results = c(id, param1_MAP, param2_MAP, param3_MAP, param4_MAP, param5_MAP)
     }
     
-    
     res_dat[n,] = results
     
     # Estimate 95 % HDI. May be omitted by the user.
     if (output_HDI == TRUE){
-      param1_hdi = hdi(ext_samp[1], ci = 0.95)
-      param2_hdi = hdi(ext_samp[2], ci = 0.95)
-      param3_hdi = hdi(ext_samp[3], ci = 0.95)
-      param4_hdi = hdi(ext_samp[4], ci = 0.95)
-      if (model != "PVLD") param5_hdi = hdi(ext_samp[5], ci = 0.95)
+      param1_hdi = paste(unlist(as.character(hdi(ext_samp[[1]], ci = 0.89)[2:3])), collapse = ", ")
+      param2_hdi = paste(unlist(as.character(hdi(ext_samp[[2]], ci = 0.89)[2:3])), collapse = ", ")
+      param3_hdi = paste(unlist(as.character(hdi(ext_samp[[3]], ci = 0.89)[2:3])), collapse = ", ")
+      param4_hdi = paste(unlist(as.character(hdi(ext_samp[[4]], ci = 0.89)[2:3])), collapse = ", ")
+      if (model != "PVLD") param5_hdi = paste(unlist(as.character(hdi(ext_samp[[5]], ci = 0.89)[2:3])), collapse = ", ")
       
       if (model == "PVLD"){
         HDI_temp = c(id, param1_hdi, param2_hdi, param3_hdi, param4_hdi)
@@ -116,35 +110,24 @@ CreateCognitiveProfile = function(data, method = "NUTS", model = "ORL_HAB", min_
       HDI_data[n,] = HDI_temp  
     }
     
-    # Save full posterior if this is specified by the user
-    if (keep_full_posterior == TRUE){
-      if (model != "PVLD") full_posterior[1+(n-1)*10000:n*10000,] = data.frame(ID = rep(id, 10000), param1 = ext_samp[1], param2 = ext_samp[2], param3 = ext_samp[3], param4 = ext_samp[4], param5 = ext_samp[5])
-      if (model == "PVLD") full_posterior[1+(n-1)*10000:n*10000,] = data.frame(ID = rep(id, 10000), param1 = ext_samp[1], param2 = ext_samp[2], param3 = ext_samp[3], param4 = ext_samp[4])
-    }
-    
     # Print progress at intervals of 10 if the user has specified this.  
     if(print_progress == TRUE & n %% 10==0){ 
-      print(paste(n, "out of", IDS, "players analysed.", sep = " "))
+      print(paste(n, "out of", length(IDS), "players analysed.", sep = " "))
     }
     n=n+1
   }
+  names(res_dat)[-1] <- param_list # Add parameter names to the dataframe
   
-  if (keep_full_posterior == F & output_HDI == F){
-    names(res_dat)[-1] <- param_list # Add parameter names to the dataframe
+  excl_id = length(unique(data$ID)) - (n-1)
+  
+  print(paste(n-1, "players have been analysed.", excl_id, "players were excluded from the analysis due to few sessions. Use the 'min_ses' argument to change the number of sessions required for inclusion in the analysis.", sep = " "))
+  
+  if (output_HDI == F){
     return(res_dat) # Return a dataframe if the user has only requires the MAP
   } else {
-    output_list = list(res_dat)
-    if (output_HDI == T){
-      names(HDI_dat)[-1] <- param_list 
-      output_list = list.append(output_list, HDI_data)
-    }
-    if (keep_full_posterior == T){
-      names(full_posterior)[-1] <- param_list
-      output_list = list.append(output_list, full_posterior)
+    output_list = list(MAP = res_dat)
+    names(HDI_data)[-1] <- param_list 
+    output_list = list.append(output_list, HDI = HDI_data)
     }
     return(output_list) # Return a list of dataframes if full_posterior or HDI is requested
-  }
-  
-  print(paste("All", n, "players have been analysed", sep = " "))
-  
 }
