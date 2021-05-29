@@ -92,7 +92,7 @@ CreateCognitiveProfile = function(data, n_games, method = "NUTS", model = "ORL_H
     
     res_dat[n,] = results
     
-    # Estimate 95 % HDI. May be omitted by the user.
+    # Estimate 89 % HDI. May be omitted by the user.
     if (output_HDI == TRUE){
       param1_hdi = paste(unlist(as.character(hdi(ext_samp[[1]], ci = 0.89)[2:3])), collapse = ", ")
       param2_hdi = paste(unlist(as.character(hdi(ext_samp[[2]], ci = 0.89)[2:3])), collapse = ", ")
