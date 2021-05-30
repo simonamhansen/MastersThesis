@@ -1,11 +1,19 @@
-# This algorithm estimates a cognitive profile for each player based on slot machine gambling data following a specific data format (see Master's Thesis).
-# The algorithm is written in the programming language R but uses Stan to estimate cognitive parameters.
+# This algorithm estimates a cognitive profile for each player based on session level slot machine gambling data following a specific data format (see Master's Thesis).
+# The algorithm is written in the programming language R but uses Stan to estimate the cognitive model parameters.
 # Before running the function make sure that you have a C++ Toolchain installed. Please see https://github.com/stan-dev/rstan/wiki/RStan-Getting-Started for instructions.
 
-# As a user you need to input the data to the algorithm. Further you may specify estimation method, model, minimum number of sessions for inclusion of the player. 
-# Lastly you may decide whether the 89 % High Density Interval should be estimated and whether progress should be printed.
-# Notice that keeping the full posterior results in very large datafiles.
-# Notice that Variational Bayes (VB) may provide inaccurate estimates but is significantly faster than the No-U-Turn Sampler (NUTS), which is the default of this algorithm.
+# As a user you only need to input the data to the algorithm and the number of games available to the players. 
+# Further you may choose to specify estimation method, model and minimum number of sessions for inclusion of the player. 
+# Lastly you may decide whether the 89 % High Density Interval (HDI) should be estimated and whether progress should be printed.
+
+# Notice that Variational Bayesian inference (VB) may provide inaccurate estimates but is significantly faster than the No-U-Turn Sampler (NUTS), which is the default of this algorithm.
+# Therefore VB should only be used after thouroughly testing that it provides accurate estimates for the model that you want to fit to the data.
+
+# Please pay attention to warning messages produced by the algorithm as these may indicate that the algorithm was unable to succesfully fit the model to the data.
+# Further the algorithm provides informative error messages if you specify a model or method that is not supported by the algorithm
+
+# The expert user may chose to add their own models to the algorithm. This requires that the created stan model is placed in the "Models" folder.
+# In the function below you will need to specify the name of the model and a list of parameter names.
 
 CreateCognitiveProfile = function(data, n_games, method = "NUTS", model = "ORL_HAB", min_ses = 80, output_HDI = T, print_progress = T){ 
   
