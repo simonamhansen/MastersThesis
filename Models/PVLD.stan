@@ -2,10 +2,12 @@ data {
   int<lower=1> N;
   int x[N];
   real o[N];
+  int<lower = 1> n_games; //Number of games in the dataset
+
 }
 transformed data {
-  vector[8] initV;
-  initV  = rep_vector(0.0, 8);
+  vector[n_games] initV;
+  initV  = rep_vector(0.0, n_games);
 }
 parameters {
   // Subject-level raw parameters 
@@ -17,7 +19,7 @@ parameters {
 
 model {
   // Define values
-  vector[8] ev;
+  vector[n_games] ev;
   real curUtil;     // utility of curFb
   real theta;       // theta = 3^c - 1
 

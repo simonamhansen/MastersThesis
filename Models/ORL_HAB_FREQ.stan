@@ -4,12 +4,13 @@ data {
   real o[N]; // outcome for each subject on each trial
   real freq[N]; // sign for frequency updating for each subject on each trial
   int x[N]; // choice for each subject on each trial
+  int<lower = 1> n_games; //Number of games in the dataset
 }
 
 // Set starting value at zero
 transformed data {
-  vector[8] initV;
-  initV = rep_vector(0.0,8);
+  vector[n_games] initV;
+  initV = rep_vector(0.0,n_games);
 }
 
 parameters {
@@ -22,10 +23,10 @@ parameters {
 }
  
 model {
-  vector[8] EF; // Expected frequency
-  vector[8] EV; // Expected value
-  vector[8] HAB; // Habitual signal
-  vector[8] util; // Combined 'choice value'
+  vector[n_games] EF; // Expected frequency
+  vector[n_games] EV; // Expected value
+  vector[n_games] HAB; // Habitual signal
+  vector[n_games] util; // Combined 'choice value'
     
   real PE_EF; // Prediction error for expected frequency
   real PE_EV; // Prediciton errror for expected value

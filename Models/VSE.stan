@@ -2,12 +2,13 @@ data {
   int<lower = 1> N; // Number of total observations
   real o[N]; // outcome for each subject on each trial. The real model treats losses and wins seperately!
   int x[N]; // choice for each subject on each trial
+  int<lower = 1> n_games; //Number of games in the dataset
 }
 
 // Set starting value at zero
 transformed data {
-  vector[8] initV;
-  initV = rep_vector(0.00,8);
+  vector[n_games] initV;
+  initV = rep_vector(0.00,n_games);
 }
 
 parameters {
@@ -22,8 +23,8 @@ parameters {
 
 model {
   
-  vector[8] Exploit;
-  vector[8] Explore;
+  vector[n_games] Exploit;
+  vector[n_games] Explore;
     
   real value;
   real Exploit_chosen;
