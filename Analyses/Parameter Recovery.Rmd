@@ -50,7 +50,7 @@ ORL forward simulation function
 ```{r}
 ORL = function(session_n_dist, Arew, Apun, K, wp, wf, theta){
   ntrials = rgamma(n= 1, shape = as.numeric(session_n_dist$estimate[1]), rate = as.numeric(session_n_dist$estimate[2]))
-  ntrials = ifelse(ntrials < 50, 50, ntrials)
+  ntrials = ifelse(ntrials < 80, 80, ntrials)
   x <- array(0, c(ntrials)) #choice
   r <- array(0, c(ntrials)) #outcome
   signX <- array(0,c(ntrials)) #sign of outcome
@@ -222,6 +222,7 @@ ORL_freq = function(session_n_dist, Aval, Afreq, Ahab, wfreq, whab){
   win_freq = c("val1", "val2", "val3", "val4", "val5", "val6", "val7", "val8") # values have been removed due to data agreements
   win_freq_sd = c("val1", "val2", "val3", "val4", "val5", "val6", "val7", "val8") # values have been removed due to data agreements
   ntrials = rgamma(n= 1, shape = as.numeric(session_n_dist$estimate[1]), rate = as.numeric(session_n_dist$estimate[2]))
+  ntrials = ifelse(ntrials < 80, 80, ntrials)
   x <- array(0, c(ntrials)) #choice
   r <- array(0, c(ntrials)) #outcome
   freq <- array(0,c(ntrials)) #sign of outcome
@@ -328,8 +329,6 @@ for (n in 1:niter){
   print(n)
 }
 
-
-
 ```
 
 
@@ -379,7 +378,7 @@ ORL with habitual update and standard ORL frequency learning (forward simulation
 
 ORL_hab = function(session_n_dist, Arew, Apun, Ahab, whab, wf){
   ntrials = rgamma(n= 1, shape = as.numeric(session_n_dist$estimate[1]), rate = as.numeric(session_n_dist$estimate[2]))
-  ntrials = ifelse(ntrials < 50, 50, ntrials)
+  ntrials = ifelse(ntrials < 80, 80, ntrials)
   x <- array(0, c(ntrials)) #choice
   r <- array(0, c(ntrials)) #outcome
   signX <- array(0,c(ntrials)) #sign of outcome
@@ -482,7 +481,6 @@ for (n in 1:niter){
   print(n)
 }
 
-
 ```
 
 
@@ -523,7 +521,6 @@ param %>% group_by(param) %>% summarise(sum(abs(true_par-infer_par))/100)
 
 param %>% group_by(param) %>% summarise(rmse(true_par, infer_par))
 
-
 ```
 
 
@@ -533,6 +530,7 @@ VSE forward simulation model
 # Set up function
 VSE = function(session_n_dist, theta, decay, alfa, phi, C) {
   ntrials = rgamma(n= 1, shape = as.numeric(session_n_dist$estimate[1]), rate = as.numeric(session_n_dist$estimate[2]))
+  ntrials = ifelse(ntrials < 80, 80, ntrials)
   x <- array(0, c(ntrials)) #choice
   o <- array(0, c(ntrials)) #outcome
   v <- array(0, c(ntrials)) #utility for the last outcome
@@ -575,7 +573,6 @@ VSE = function(session_n_dist, theta, decay, alfa, phi, C) {
   
   results <- list(x=x, o=o, Exploit=Exploit, Explore = Explore)
 }
-
 
 ```
 
@@ -825,25 +822,31 @@ Create one plot with all parameter recovery results
 
 ```{r}
 
-ORL = readRDS(file = "Results/ORL_recover_Ktr.rds")
-ORL2 = readRDS(file = "Results/ORL2_recover_results.rds")
-ORL3 = readRDS(file = "Results/HabitOnlyORL.rds")
-PVL = readRDS(file = "Results/PVLD_recovery_results.rds")
-VSE = readRDS(file = "Results/VSE_recovery_results.rds")
+#ORL = readRDS(file = "Results/ORL_recover_Ktr.rds")
+#ORL2 = readRDS(file = "Results/ORL2_recover_results.rds")
+#ORL3 = readRDS(file = "Results/HabitOnlyORL.rds")
+#PVL = readRDS(file = "Results/PVLD_recovery_results.rds")
+#VSE = readRDS(file = "Results/VSE_recovery_results.rds")
+
+ORL = read.csv("ORL_more80.csv")
+ORL2 = read.csv("ORL_HABFREQ_more80.csv")
+ORL3 = read.csv("ORL_HAB_More80.csv")
+PVL = read.csv("PVL_more80.csv")
+VSE = read.csv("VSE_more80.csv")
 
 VSE$param[VSE$param == "beta"] = "c"
 ORL3$param[ORL3$param == "Apun"] = "Aloss"
 ORL2$param[ORL2$param == "AHab"] = "Ahab"
 
-PVL_plot = ggplot(PVL, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("PVL-Delta model") + ggeasy::easy_center_title()
+PVL_plot = ggplot(PVL, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Parameter")) + ggtitle("PVL-Delta model") + ggeasy::easy_center_title() + xlim(-2,2)+ ylim(-2,2)
 
-VSE_plot =ggplot(VSE, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("VSE model") + ggeasy::easy_center_title() 
+VSE_plot =ggplot(VSE, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Parameter")) + ggtitle("VSE model") + ggeasy::easy_center_title() + xlim(-2.5,3) + ylim(-2.5,3)
 
-ORL_plot = ggplot(ORL, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("ORL model") + ggeasy::easy_center_title()
+ORL_plot = ggplot(ORL, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Parameter")) + ggtitle("ORL model") + ggeasy::easy_center_title() + xlim(-4.5,3) + ylim(-4.5, 3)
 
-ORL2_plot = ggplot(ORL2, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("Habitual + within session frequency ORL model") + ggeasy::easy_center_title()
+ORL2_plot = ggplot(ORL2, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Parameter")) + ggtitle("Habitual + within session frequency ORL model") + ggeasy::easy_center_title() + xlim(-2.5, 4) +ylim(-2.5,4)
 
-ORL3_plot = ggplot(ORL3, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Model parameter")) + ggtitle("Habitual ORL modelt") + ggeasy::easy_center_title() 
+ORL3_plot = ggplot(ORL3, aes(x = true_par, y = infer_par, colour = param)) + geom_point(alpha = 0.25) + geom_abline() + theme_bw() + xlab("True parameter value") + ylab("Inferred parameter value") + geom_smooth(method="lm", se = FALSE) + guides(colour=guide_legend(title="Parameter")) + ggtitle("Habitual ORL modelt") + ggeasy::easy_center_title() + xlim(-5, 3) + ylim(-5, 3)
 
 cowplot::plot_grid(PVL_plot, VSE_plot, ORL_plot, ORL3_plot, ORL2_plot, nrow = 3, ncol = 2)
 
