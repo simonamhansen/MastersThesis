@@ -136,5 +136,5 @@ CreateCognitiveProfile = function(data, n_games, method = "NUTS", model = "ORL_H
     names(HDI_data)[-1] <- param_list 
     output_list = list.append(output_list, HDI = HDI_data)
     }
-    return(output_list) # Return a list of dataframes if full_posterior or HDI is requested
+    return(output_list) # Return a list of dataframes if HDI is requested
 }
