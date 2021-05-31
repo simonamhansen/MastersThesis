@@ -62,7 +62,7 @@ risk = risk$`mean(Risk.score)`
 
 ORL fit
 ```{r}
-# Preapre the data
+# Prepare the data
 dat = list(N=tol_ses, Tsubj = Tsubj, s =s, o=o_trajec, sign= sign, x=x)
 
 ORL_fit = stan(file = "StanModelsForModelComparison/ORL_ind.stan", data = dat, cores = 4, chains = 4, iter = 4000, warmup =  1500, thin = 2)
@@ -82,8 +82,8 @@ mean(switch_pred == switch_dat)
 mean(switch_pred) 
 mean(switch_dat)
 
+# Compute LOOIC
 loglik=extract_log_lik(ORL_fit, parameter_name = "log_lik")
-
 loo(loglik)
 
 ```
