@@ -6,29 +6,31 @@ output: html_document
 Data prep
 
 ```{r}
-library(pacman)
-p_load(dplyr, rstan, bayestestR, loo, lubridate)
+pacman::p_load(dplyr, rstan, bayestestR, loo, lubridate)
 
+# Helper function
 split_tibble <- function(tibble, column = 'col') {
   tibble %>% split(., .[,column]) %>% lapply(., function(x) x[,setdiff(names(x),column)])
 }
 
 setwd("~/Cognitive model")
 
+# Load data including expert ratings
 data = read.csv("Data/session1000_wExpertRatings.csv", row.names =  1)
 
+# Only consider the last 3 months of the data window
 data = data[between(month(data$time_first), 4, 6),]
 
+# Count number of sessions per player
 count_temp = data %>% count(profile_id) 
 
-count_more100 = count_temp[count_temp$n >= 100,]
-
-mean(count_more100$n)
-
-ID_more100sub = readRDS("subsetformodelcomparison.rds")
-
+#Identify players with more than 100 sessions
 ID_more100 = count_temp$profile_id[count_temp$n >= 100]
 
+# Extract a subset of 100 players
+ID_more100sub = sample(ID_more100, 100)
+
+# Subset data
 data2 = data %>% filter(profile_id %in% ID_more100sub)
 
 s = length(unique(data2$profile_id)) # Number of subjects
@@ -60,18 +62,19 @@ risk = risk$`mean(Risk.score)`
 
 ORL fit
 ```{r}
+# Preapre the data
 dat = list(N=tol_ses, Tsubj = Tsubj, s =s, o=o_trajec, sign= sign, x=x)
 
-model = stan_model("Models/Recovery/ORL_ind.stan")
+ORL_fit = stan(file = "StanModelsForModelComparison/ORL_ind.stan", data = dat, cores = 4, chains = 4, iter = 4000, warmup =  1500, thin = 2)
 
-fit = vb(model, dat, output_samples = 999)
-
-predictions = extract(fit, pars = c("y_pred"))
-
-mean(apply(predictions$y_pred, c(2), median) == x)
-
+# Extract predictions
+predictions = extract(ORL_fit, pars = c("y_pred"))
 med_pred = apply(predictions$y_pred, c(2), median)
 
+# Estimate the one-step-ahead predictive accuracy
+mean(apply(predictions$y_pred, c(2), median) == x)
+
+# Estimate switching accuracy
 switch_dat= ifelse(diff(x) == 0, 0, 1) 
 switch_pred = ifelse(diff(med_pred) == 0,0,1)
 
@@ -79,7 +82,7 @@ mean(switch_pred == switch_dat)
 mean(switch_pred) 
 mean(switch_dat)
 
-loglik=extract_log_lik(fit, parameter_name = "log_lik")
+loglik=extract_log_lik(ORL_fit, parameter_name = "log_lik")
 
 loo(loglik)
 
@@ -90,10 +93,7 @@ VSE model fit
 ```{r}
 dat = list(N=tol_ses, Tsubj = Tsubj, s =s, o=o_trajec, x=x)
 
-#model = stan_model("Models/Recovery/VSE_ind.stan")
-#VSE_fit = vb(model, dat, tol_rel_obj = 0.001, output_samples = 999) 
-
-VSE_fit = stan(file = "Models/Recovery/VSE_ind.stan", data = dat, cores = 4, chains = 4, iter = 4000, warmup =  1500, thin = 2)
+VSE_fit = stan(file = "StanModelsForModelComparison/VSE_ind.stan", data = dat, cores = 4, chains = 4, iter = 4000, warmup =  1500, thin = 2)
 
 # Extract log likelihood 
 loglik=extract_log_lik(VSE_fit, parameter_name = "log_lik", merge_chains = TRUE)
@@ -123,7 +123,7 @@ PVLD model fit
 
 dat = list(N=tol_ses, Tsubj = Tsubj, s=s, o=o_trajec, x=x)
 
-model = stan_model("Models/Recovery/PVLD_ind.stan")
+model = stan_model("StanModelsForModelComparison/PVLD_ind.stan")
 
 PVL_fit = vb(model, dat, tol_rel_obj = 0.001, output_samples = 999) 
 
@@ -154,7 +154,7 @@ Habitual ORL fit
 ```{r}
 dat = list(N=tol_ses, Tsubj = Tsubj, s =s, o=o_trajec, sign = sign, x=x)
 
-model = stan_model("Models/Recovery/ORL_HAB_ind.stan")
+model = stan_model("StanModelsForModelComparison/ORL_HAB_ind.stan")
 
 fit = vb(model, dat, tol_rel_obj = 0.001, output_samples = 999)
 
@@ -185,7 +185,7 @@ Habitual + win frequency ORL fit
 ```{r}
 dat = list(N=tol_ses, Tsubj = Tsubj, s =s, o=o_trajec, freq= freq, x=x)
 
-model = stan_model("Models/Recovery/ORL2_ind.stan")
+model = stan_model("StanModelsForModelComparison/ORL2_ind.stan")
 
 fit = vb(model, dat, tol_rel_obj = 0.001, output_samples = 999)
 
